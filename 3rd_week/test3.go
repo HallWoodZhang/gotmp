@@ -40,7 +40,7 @@ func (a *App) Run() error {
 		svr := svr
 		g.Go(func() error {
 			<-ctx.Done()
-			return svr.Shutdown(ctx)
+			return svr.Shutdown(context.TODO())
 		})
 
 		g.Go(func() error {
