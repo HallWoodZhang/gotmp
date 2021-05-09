@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -73,4 +74,16 @@ func (a *App) Stop() error {
 		a.cancel()
 	}
 	return nil
+}
+
+func main() {
+	addr2Handler := make(map[string]http.Handler)
+	addr2Handler[":8080"] = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		fmt.Fprintln(w, "hello")
+	})
+
+	defaultCtx := context.Background()
+	app := New(defaultCtx, addr2Handler)
+	fmt.Println(app.Run())
 }
