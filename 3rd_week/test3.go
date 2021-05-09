@@ -2,50 +2,71 @@ package main
 
 import (
 	"context"
-	"flag"
-	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
-var addr = flag.String("svr addr", ":8080", "svr addr")
+type App struct {
+	ctx    context.Context
+	cancel func()
+	svrs   []http.Server
+}
 
-func main() {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second)
-		fmt.Fprintln(w, "hello")
-	})
-
-	srv := http.Server{
-		Addr:    *addr,
-		Handler: handler,
-	}
-
-	// make sure idle connections returned
-	processed := make(chan struct{})
-	go func() {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt)
-		sig := <-c
-
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(ctx); nil != err {
-			log.Fatalf("server shutdown failed, err: %v\n", err)
+func New(ctx context.Context, addr2Handler map[string]http.Handler) *App {
+	servers := []http.Server{}
+	for addr, handler := range addr2Handler {
+		newSrv := http.Server{
+			Addr:    addr,
+			Handler: handler,
 		}
-		log.Println("server shutdown with system signal", sig)
-
-		close(processed)
-	}()
-
-	// serve
-	err := srv.ListenAndServe()
-	if http.ErrServerClosed != err {
-		log.Fatalf("server shutdown :%v\n", err)
+		servers = append(servers, newSrv)
 	}
-	// waiting for goroutine above processed
-	<-processed
+	defaultCtx := context.Background()
+	ctx, cancel := context.WithTimeout(defaultCtx, 10*time.Second)
+	return &App{
+		ctx:    ctx,
+		cancel: cancel,
+		svrs:   servers,
+	}
+}
+
+func (a *App) Run() error {
+	g, ctx := errgroup.WithContext(a.ctx)
+	for _, svr := range a.svrs {
+		svr := svr
+		g.Go(func() error {
+			<-ctx.Done()
+			return svr.Shutdown(ctx)
+		})
+
+		g.Go(func() error {
+			return svr.ListenAndServe()
+		})
+	}
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+
+	g.Go(func() error {
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-sig:
+				a.Stop()
+			}
+		}
+	})
+	return nil
+}
+
+func (a *App) Stop() error {
+	if a.cancel != nil {
+		a.cancel()
+	}
+	return nil
 }
